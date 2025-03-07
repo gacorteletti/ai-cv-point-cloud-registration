@@ -48,3 +48,6 @@ pip install MinkowskiEngine==0.5.4
     `print(ME.__version__)`
 this should return:
     `0.5.4`]
+
+then we need to install the FCGF requirements listed on the `FCGF/requirements.txt` file:
+`pip install -r source/FCGF/requirements.txt`
