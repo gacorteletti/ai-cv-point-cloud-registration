@@ -1,0 +1,3 @@
+[submodule "source/FCGF"]
+	path = source/FCGF
+	url = https://github.com/gacorteletti/FCGF.git
