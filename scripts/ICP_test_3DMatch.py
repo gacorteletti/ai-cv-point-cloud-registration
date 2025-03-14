@@ -1,20 +1,4 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# This notebook was done to implement the **complete Global Registration and local refinement pipeline (FPFH + RANSAC+ ICP)** on the public datasets **3DMatch and 3DLoMatch**. Overall, it follows the same implemantation as the previous notebook, but with some minor changes to adapt it to read data from the desired datasets instead of using the standard Open3D demo data. Hence, here we only highlight what have been modified in relation to the previous implemantation.
-# 
-# For further detail on this complete pipeline, refer to the previous notebook that presented it: https://colab.research.google.com/drive/1xVCUeVGsRn_gkDODaQX-XpvTth6RwbFS?usp=sharing
-# 
-# Furthermore, for details on the local refinement with ICP implementation, refer to the notebook: https://colab.research.google.com/drive/1pRmFIOI4-bQadicDb7-i8RV1blPlGxl1?usp=sharing
-
-# ---
-# 
-# # 1 Setting Up the Environment
-# 
-# First, we need to install the library Open3D as well as import the others which will be used.
-
-# In[1]:
-
+# 1 Setting Up the Environment
 
 from collections import defaultdict
 from sklearn.preprocessing import MinMaxScaler
@@ -30,18 +14,16 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 
-# ---
-# 
-# # 2 Input Data
-# 
-# Now, as mentioned in the beginning, we are going to use the 3DMatch dataset. More specifically, we will adopt the preprocessed by OverlapPedrato an avilable at https://share.phys.ethz.ch/~gsg/pairwise_reg/3dmatch.zip
-# 
-# In order to read it, first we create a folder dedicated to the data used in our tests. Then, we download the `.zip` file containing the data and unzip it into the data folder.
-# 
-# Besides that, for this case, we must correct the data split by creating a `validation` split as explained in the notes of this project's meetings. The scenes that should be used for validation are defined in `configs/3dmatch_val.txt`.
 
-# In[2]:
-
+# 2 Input Data
+# Now, as mentioned in the beginning, we are going to use the 3DMatch dataset.
+# More specifically, we will adopt the preprocessed by OverlapPedrato an avilable
+# at https://share.phys.ethz.ch/~gsg/pairwise_reg/3dmatch.zip
+# In order to read it, first we create a folder dedicated to the data used in our
+# tests. Then, we download the `.zip` file containing the data and unzip it into the data folder.
+# Besides that, for this case, we must correct the data split by creating a
+# `validation` split as explained in the notes of this project's meetings.
+# The scenes that should be used for validation are defined in `configs/3dmatch_val.txt`.
 
 # Define folder and file path
 download_folder = "../data"
@@ -102,13 +84,10 @@ else:
 print("Dataset is ready!")
 
 
-# Then we can create a HashMap (dictionary) where each dataset is a key and its values are another hash map which contains the scenes of each split (train, test and validation).
-# 
-# By defining this, later we can read any pair of clouds using this HashMap as a directory reference.
-
-# In[3]:
-
-
+# Then we can create a HashMap (dictionary) where each dataset is a key and its
+# values are another hash map which contains the scenes of each split (train,
+# test and validation). By defining this, later we can read any pair of clouds
+# using this HashMap as a directory reference.
 data = {}                                               #HashMap of scenes for each dataset
 data_root = "../data" 
 datasets = ['3DMatch']      #os.listdir(data_root)                        #list of all datasets
@@ -126,10 +105,8 @@ for dataset in datasets:                                #for each dataset
 print(data)
 
 
-# We can also define a function to visualize the given data split data (pre processed by OverlapPredator and also used for GeoTransformer).
-
-# In[4]:
-
+# We can also define a function to visualize the given data split data (pre processed
+# by OverlapPredator and also used for GeoTransformer).
 
 def get_split(data):
     """
@@ -156,59 +133,14 @@ def get_split(data):
 get_split(data)
 
 
-# Once again we also define the function that allows us to visualize the relative pose between a pair of clouds.
 
-# In[5]:
-
-
-def draw_registration_result(source, target, transformation, voxel_size=0.0):
-    """
-    Plots the pair of target (cyan) and transformed source (yellow)
-    cloud on top of each other. It also performs downsampling, if
-    desired, to speed up the visualization.
-
-    Args:
-        source (open3d.geometry.PointCloud): Source cloud
-        target (open3d.geometry.PointCloud): Target cloud
-        transformation (numpy.ndarray): Transformation to be visualized
-        voxel_size (float): Resulting size of voxels after downsampling,
-                            if desired (default is no downsampling)
-
-    Returns:
-        open3d.geometry.PointCloud: Downsampled cloud
-        open3d.registration.Feature: Features for registration
-    """
-
-    #create copies of both clouds to protect original data
-    source_temp = copy.deepcopy(source)
-    target_temp = copy.deepcopy(target)
-
-    #downsample for faster visualization (voxel_size is in meters)
-    if (voxel_size):
-        source_temp = source_temp.voxel_down_sample(voxel_size)
-        target_temp = target_temp.voxel_down_sample(voxel_size)
-
-    #paint target cyan and source yellow
-    source_temp.paint_uniform_color([1, 0.706, 0])
-    target_temp.paint_uniform_color([0, 0.651, 0.929])
-
-    #apply the transformation to the source cloud
-    source_temp.transform(transformation)
-
-    #plot target and transformed source clouds
-    o3d.visualization.draw_plotly([source_temp, target_temp], width=1200, height=800)
-
-
-# ---
-# 
-# # 3 ICP Pipeline Implementation (Global Registration — FPFH + RANSAC — and Local Refinement — ICP)
-# 
+# 3 ICP Pipeline Implementation (Global Registration — FPFH + RANSAC — and Local Refinement — ICP)
 # Now, we define the same functions as before to implement the complete pipeline.
-# 
-# OBS: the only diference here is that for the ICP refinement, since a plane-to-plane ICP algorithm was used, we had to modify its function to estimate the normals of the target cloud. This was needed because in the preprocessing function, only the normals of the downsampled clouds are estimated, but the ICP uses the clouds at their original resolution.
-
-# In[6]:
-
+# OBS: the only diference here is that for the ICP refinement, since a plane-to-plane
+# ICP algorithm was used, we had to modify its function to estimate the normals of
+# the target cloud. This was needed because in the preprocessing function, only the
+# normals of the downsampled clouds are estimated, but the ICP uses the clouds at
+# their original resolution.
 
 def preprocess_cloud(pcd, voxel_size):
     """
@@ -273,7 +205,7 @@ def execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpf
 
 
 
-def execute_ICPrefinement(source, target, dist_threshold, trans_init, voxel_size):
+def execute_ICPrefinement(source, target, inlier_th, trans_init, voxel_size):
     """
     Executes the local ICP refinement of a initial transformation.
 
@@ -293,17 +225,13 @@ def execute_ICPrefinement(source, target, dist_threshold, trans_init, voxel_size
     target.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
 
     #performs the point-to-plane ICP
-    ICP_registration = o3d.pipelines.registration.registration_icp(source, target, dist_threshold, trans_init,
+    ICP_registration = o3d.pipelines.registration.registration_icp(source, target, inlier_th, trans_init,
                                                                    o3d.pipelines.registration.TransformationEstimationPointToPlane())
     return ICP_registration
 
-
 # Now we can define an overall registration function that combines all the previous ones.
 
-# In[7]:
-
-
-def GlobalRegistration_withICP(source, target, voxel_size, dist_threshold_ICP):
+def GlobalRegistration_withICP(source, target, voxel_size, inlier_th):
     """
     Executes the complete pipeline of Global Registration (FPFH + RANSAC) with ICP refinement.
 
@@ -326,31 +254,22 @@ def GlobalRegistration_withICP(source, target, voxel_size, dist_threshold_ICP):
 
     #Local Refinement (ICP)
     trans_init = result_ransac.transformation
-    result_icp = execute_ICPrefinement(source, target, dist_threshold_ICP, trans_init, voxel_size)
+    result_icp = execute_ICPrefinement(source, target, inlier_th, trans_init, voxel_size)
 
     return result_icp
 
+# Hence, we can apply it to all our data. As required by the [3DMatch](https://3dmatch.cs.princeton.edu/#geometric-registration-benchmark)
+# dataset, in order to properly evaluate it, **for each scene, we have to extensively try
+# to register each non-consecutive fragment pair**: # $ (P_i, P_j)_{i+1<j} $
 
-# Hence, we can apply it to all our data. As required by the [3DMatch](https://3dmatch.cs.princeton.edu/#geometric-registration-benchmark) dataset, in order to properly evaluate it, **for each scene, we have to extensively try to register each non-consecutive fragment pair**:
-# $ (P_i, P_j)_{i+1<j} $
-# 
-# First we define a function that performs the registration for all non-consecutive pairs of clouds from a specific scene.
+# First we define a function that performs the registration for all non-consecutive
+# pairs of clouds from a specific scene.
 
-# Notice that here you can use a `matching_pairs` list that defines a subset of pairs to be considered for testing. This is done to allow to run faster and partial tests. Besides that, only pairs with an overlap of at least `30%` are saved, following the author's evaluation convention (i.e., an alignment is considered achieved only with it produced a registration with over 30% overlap)
-
-# In[8]:
-from time import sleep
-sleep(200)
-
-def compute_overlap_ratio(pcd0, pcd1, trans, voxel_size):
-    pcd0_down = pcd0.voxel_down_sample(voxel_size)
-    pcd1_down = pcd1.voxel_down_sample(voxel_size)
-    matching01 = get_matching_indices(pcd0_down, pcd1_down, trans, voxel_size, 1)
-    matching10 = get_matching_indices(pcd1_down, pcd0_down, np.linalg.inv(trans),
-                                    voxel_size, 1)
-    overlap0 = len(matching01) / len(pcd0_down.points)
-    overlap1 = len(matching10) / len(pcd1_down.points)
-    return max(overlap0, overlap1)
+# Notice that here you can use a `matching_pairs` list that defines a subset of pairs
+# to be considered for testing. This is done to allow to run faster and partial tests.
+# Besides that, only pairs with an overlap of at least `30%` are saved, following the
+# author's evaluation convention (i.e., an alignment is considered achieved only if
+# it produced a registration with over 30% overlap)
 
 def get_matching_indices(source, target, trans, search_voxel_size, K=None):
     source_copy = copy.deepcopy(source)
@@ -368,7 +287,19 @@ def get_matching_indices(source, target, trans, search_voxel_size, K=None):
     return match_inds
 
 
-def ICP_pipeline_scene(scene_dir, voxel_size, dist_threshold_ICP, subset=None, matching_pairs=None):
+def compute_overlap_ratio(pcd0, pcd1, trans, voxel_size):
+    pcd0_down = pcd0.voxel_down_sample(voxel_size)
+    pcd1_down = pcd1.voxel_down_sample(voxel_size)
+    matching01 = get_matching_indices(pcd0_down, pcd1_down, trans, voxel_size, 1)
+    matching10 = get_matching_indices(pcd1_down, pcd0_down, np.linalg.inv(trans),
+                                    voxel_size, 1)
+    overlap0 = len(matching01) / len(pcd0_down.points)
+    overlap1 = len(matching10) / len(pcd1_down.points)
+    return max(overlap0, overlap1)
+
+
+
+def ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs):
     """
     Executes the complete ICP pipeline for a whole scene.
 
@@ -383,18 +314,6 @@ def ICP_pipeline_scene(scene_dir, voxel_size, dist_threshold_ICP, subset=None, m
         list: Array where each element is a point cloud of the scene
     """
 
-    scene = scene_dir.split('/')[-1]
-    frag_path = os.path.join(scene_dir, 'fragments')
-
-
-    if not subset:
-        num_frags = len(os.listdir(frag_path))                                              #compute number of fragments
-        matching_pairs = {scene: []}
-        for i in range(num_frags):
-            for j in range(i + 2, num_frags):
-                matching_pairs[scene].append([i, j])
-
-
     #table to save registrations results of each scene
     scene_results = pd.DataFrame({
     "Scene": pd.Series(dtype='str'),
@@ -405,19 +324,21 @@ def ICP_pipeline_scene(scene_dir, voxel_size, dist_threshold_ICP, subset=None, m
     "Transformation": pd.Series(dtype='object')
     })
 
+    scene = frag_folder.split('/')[-2]
+
     for pair in matching_pairs[scene]:
 
         tgt_ID, src_ID = pair[0], pair[1]
         print('\tMatching %03d %03d' %(tgt_ID,src_ID))
 
-        src_path = os.path.join(frag_path, 'cloud_bin_%d.ply' %src_ID)
-        tgt_path = os.path.join(frag_path, 'cloud_bin_%d.ply' %tgt_ID)
+        src_path = os.path.join(frag_folder, 'cloud_bin_%d.ply' %src_ID)
+        tgt_path = os.path.join(frag_folder, 'cloud_bin_%d.ply' %tgt_ID)
 
         source = o3d.io.read_point_cloud(src_path)
         target = o3d.io.read_point_cloud(tgt_path)
 
         #Execute the complete pipeline
-        final_reg = GlobalRegistration_withICP(source, target, voxel_size, dist_threshold_ICP)
+        final_reg = GlobalRegistration_withICP(source, target, voxel_size, inlier_th)
 
         ratio = compute_overlap_ratio(source, target, final_reg.transformation, voxel_size)
         print('\t\tOverlap Ratio: %.4f' %ratio)
@@ -435,16 +356,27 @@ def ICP_pipeline_scene(scene_dir, voxel_size, dist_threshold_ICP, subset=None, m
     return scene_results
 
 
-# OBS: To save the transformation in the table, we need to use a wrapper around the numpy array, so we pass it as a list using [ ]. This is needed because Pandas expects each column/row to be a sequence of values. So, without the brackets, Pandas would try to iterate over *final_reg.transformation* and add each row of the transformation matrix as separate rows of the dataframe, which is not desired. By enclosing it in brackets, we ensure that the entire transformation matrix is inserted as a single entry in the DataFrame.
+# OBS: To save the transformation in the table, we need to use a wrapper around the
+# numpy array, so we pass it as a list using [ ]. This is needed because Pandas expects
+# each column/row to be a sequence of values. So, without the brackets, Pandas would
+# try to iterate over *final_reg.transformation* and add each row of the transformation
+# matrix as separate rows of the dataframe, which is not desired. By enclosing it in
+# brackets, we ensure that the entire transformation matrix is inserted as a single
+# entry in the DataFrame.
 
-# Then we can also define a function to perform the pipeline on all the scenes of a given split of a dataset.
-# 
-# OBS: here we use the `defaultdict(list)` just to avoid having to initialize each key. In this way, any time we add something to a key, in case that key does not exist yet, it is automatically initialized with its default value as a empty list.
+# Then we can also define a function to perform the pipeline on all the scenes of
+# a given split of a dataset.
 
-# As mentioned before, here you can use a `configs/matching_pairs.txt` file that defines which subset of pairs should be consider for testing. This is done to allow to run fast and partial tests. This file is generated by the FCGF algorithm, in such a way that first we perform the test on FCGF, which randomly samples non-conversutive pairs for alignment. Then, it saves the pairs it considered in a `.txt` file, which we use here to guarantee that we valuate ICP with the same samples (pairs).
+# OBS: here we use the `defaultdict(list)` just to avoid having to initialize each
+# key. In this way, any time we add something to a key, in case that key does not
+# exist yet, it is automatically initialized with its default value as a empty list.
 
-# In[9]:
-
+# As mentioned before, here you can use a `configs/matching_pairs.txt` file that defines
+# which subset of pairs should be consider for testing. This is done to allow to run
+# fast and partial tests. This file is generated by the FCGF algorithm, in such a
+# way that first we perform the test on FCGF, which randomly samples non-conversutive
+#  for alignment. Then, it saves the pairs it considered in a `.txt` file, which we
+# use here to guarantee that we valuate ICP with the same samples (pairs).
 
 def get_matching_pairs(file):
     scene = None
@@ -461,7 +393,7 @@ def get_matching_pairs(file):
     return matching_pairs
 
 
-def ICP_pipeline(dataset, split, voxel_size, dist_threshold_ICP, subset=False):
+def ICP_pipeline(dataset, split, voxel_size, inlier_th, subset=False):
     """
     Executes the complete ICP pipeline for a whole split
     (train, test or validation) of a given dataset.
@@ -490,71 +422,80 @@ def ICP_pipeline(dataset, split, voxel_size, dist_threshold_ICP, subset=False):
 
     if subset:
         if not os.path.isfile('../configs/matching_pairs.txt'):
-            print("The file with the cloud pairs to be considered for the subset test was not found.")
+            print("The file with the subset of cloud pairs to be considered for the test was not found.\nPlease upload it at: ../configs/matching_pairs.txt'")
         else:
             matching_pairs = get_matching_pairs('../configs/matching_pairs.txt')
-    else:
-        matching_pairs = None
 
     for scene in data[dataset][split]:                                                              #for each scene
         print("Set: %s," %scene)
 
-        scene_dir = os.path.join(data_root, dataset, split, scene)
+        frag_folder = f"{data_root}/{dataset}/{split}/{scene}/fragments"
 
-        scene_results = ICP_pipeline_scene(scene_dir, voxel_size, dist_threshold_ICP, subset, matching_pairs)      #apply pipeline
-        dataset_results = pd.concat([dataset_results, scene_results], ignore_index=True)                                        #append its results
+        if not subset:
+            num_frags = len(os.listdir(frag_folder))                           #compute number of fragments
+            matching_pairs = {scene: []}
+            for i in range(num_frags):
+                for j in range(i + 2, num_frags):
+                    matching_pairs[scene].append([i, j])
+
+        scene_results = ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs)     #apply pipeline
+        
+        dataset_results = pd.concat([dataset_results, scene_results], ignore_index=True)                    #append its results
 
     return dataset_results
 
 
 
-# # 5 Algorithm Testing and Results
-# 
-# Now we can use this best combination on the test split to assess how this algorithm is performing.
+# 5 Algorithm Testing and Results
+# Now we can use this best combination on the test
+# split to assess how thisalgorithm is performing.
 
-# In[10]:
+voxel_size = 0.05            # best_voxel_size obtained at last validation
+inlier_th = 0.05             # 5 cm --> this must be the same for ICP
+dataset = "3DMatch"                        
+split = 'test'
+subset = True
 
-
-voxel_size = 0.05 #best_voxel_size                                                              #downsample to voxels with voxel_size [cm]
-dist_threshold_ICP = 1.5*voxel_size #best_factor*voxel_size                                     #ICP correspondence distance threshold --> HIGHER = FASTER
-dataset = "3DMatch"                                                                             #given a dataset
-
-print("Applying ICP to TEST split using:\n--> voxel_size=%f\n--> distance threshold=%f" %(voxel_size, dist_threshold_ICP))
-results = ICP_pipeline(dataset, "test", voxel_size, dist_threshold_ICP, subset=True)              #apply pipeline
-#display(results)
-
-
-# Export results table so we can use it later without needing to run the validation/testing again.
-
-# In[12]:
-
-
-filename = "Full_3DMatch_Results" # <<< FILL
-
-
-csv_folder = f"../output/ICP_Pipeline/csv"
-os.makedirs(csv_folder, exist_ok=True)     # Create folder if it doesn't exist
+run_name = "script_test_subset3"
 
 time = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime('%Y-%m-%d_%H-%M-%S')
-csv_path = f"{csv_folder}/{filename}-{time}.csv"
+output_folder = f"../output/ICP_Pipeline/{run_name}-{time}"
 
-results.to_csv(csv_path, index=False)
-print(f"The results were saved at output/ICP_Pipeline{filename}-{time}.csv")
+print("Applying ICP to TEST split using:\n--> voxel_size=%f\n--> distance threshold=%f" %(voxel_size, inlier_th))
+print('======================================================')
+results = ICP_pipeline(dataset, split, voxel_size, inlier_th, subset)              #apply pipeline
 
-
-# 
-# 
-# #### Generation of .log file
-# 
-# From the result table, we can obtain the .log file to evaluate the registration with the MATLAB script provided by the 3DMatch's author.
-
-# In[13]:
+print("============================================== Registration Table ==============================================")
+print(results.to_string(index=False))
+print("================================================================================================================")
 
 
-# In case you don't want to run all the testing again
-# You can input the .csv file you previously obtained
-# And you thiis cell to retrive the DF  table
-results = pd.read_csv(csv_path) # change the path to the csv you desire
+# Export results table so we can use it later without needing to run the testing again.
+
+def save_registration_table(df, output_folder):
+
+    registration_folder = f"{output_folder}/registration"
+    if not os.path.isdir(registration_folder):
+        os.makedirs(registration_folder)
+
+    reg_table_path =  f"{registration_folder}/registration_table_ICP.csv"
+    df.to_csv(reg_table_path, index=False)
+    print(f'Registration results table saved at: {reg_table_path}')
+
+    return reg_table_path
+
+reg_table_path = save_registration_table(results, output_folder)
+
+
+
+# 5.1 Generating .log files
+# From the result table, we can obtain the .log file to evaluate the registration
+# with the MATLAB script provided by the 3DMatch's author.
+
+# First, we define an auxiliary function to retrieve the registration table 
+# results, which was previously saved as a `.csv` file, back to a Pandas 
+# DataFrame. This was done to prevent the need of running the tests again 
+# in case the notebook was reset.
 
 def string_to_nparray(matrix_str):
     rows_list = []
@@ -565,50 +506,106 @@ def string_to_nparray(matrix_str):
     matrix = np.array(rows_list)
     return matrix
 
-results['Source'] = results['Source'].astype(int)
-results['Target'] = results['Target'].astype(int)
-results['Fitness'] = results['Fitness'].astype(float)
-results['Inlier RMSE'] = results['Inlier RMSE'].astype(float)
-results['Transformation'] = results['Transformation'].apply(string_to_nparray)
 
-#results.head()
+# In case you don't want to run all the testing again
+# You can input the .csv file you previously obtained
+# And you thiis cell to retrive the DF  table
+def get_df_from_reg_table(reg_table_path):
+    
+    if not os.path.isfile(reg_table_path):
+        print(f'No file found at: {reg_table_path}\n')
+        return None
+    else: 
+        df = pd.read_csv(reg_table_path) 
+        df['Source'] = df['Source'].astype(int)
+        df['Target'] = df['Target'].astype(int)
+        df['Fitness'] = df['Fitness'].astype(float)
+        df['Inlier RMSE'] = df['Inlier RMSE'].astype(float)
+        df['Transformation'] = df['Transformation'].apply(string_to_nparray)
+        return df
+
+results = get_df_from_reg_table(reg_table_path)   # change the path to the csv you desire
+
+# Now with the retrieved DataFrame we can define
+# the function to generate the `.log` files to be stored.
+
+def get_nFrags(subset, dataset, split):
+
+    nFrags_dict = defaultdict(int)
+
+    if subset:
+        if not os.path.isfile('../configs/matching_pairs.txt'):
+            print("The file with the subset of cloud pairs to be considered for the test was not found.\nPlease upload it at: ../configs/matching_pairs.txt'")
+            return None
+        else:
+            matching_pairs = get_matching_pairs('../configs/matching_pairs.txt')
+            for scene in matching_pairs.keys():
+                nPairs = len(matching_pairs[scene])
+                nFrags = int((1 + np.sqrt(1 + 8*nPairs))/2)
+                nFrags_dict[scene] = nFrags
+
+    else:
+        for scene in data[dataset][split]:                                      #for each scene
+                frag_folder = f"{data_root}/{dataset}/{split}/{scene}/fragments"
+                nFrags_dict[scene] = len(os.listdir(frag_folder))               #compute number of fragments
+    
+    return nFrags_dict
 
 
-# In[14]:
+def write_log(df, log_path, nFrags):
 
-
-def write_log(df, log_path, nFrags_perScene, dataset, split):
     with open(log_path, 'w') as f:
         for _, df_row in df.iterrows():
             source_id = df_row['Source']
             target_id = df_row['Target']
             transformation = df_row['Transformation']
-            f.write(f"{target_id} {source_id} {nFrags_perScene}\n")
+            f.write(f"{target_id} {source_id} {nFrags}\n")
             for i in range(4):
                 f.write(" ".join(map('{0:.12f}'.format, transformation[i])) + "\n")
 
-def generate_output(df, nFrags_perScene, dataset, split, out_path):
-    if not os.path.isdir(out_path):
-        os.makedirs(out_path)
-    scene_list = results['Scene'].unique()      # list of all unique scene
+
+def save_registration_logs(df, subset, dataset, split, output_folder):
+    
+    logs_folder = f"{output_folder}/registration/logs"
+    if not os.path.isdir(logs_folder):
+        os.makedirs(logs_folder)
+
+    nFrags_dict = get_nFrags(subset, dataset, split)
+
+    scene_list = results['Scene'].unique()                  # list of all unique scene
     for scene in scene_list:
-        df_scene = df[df['Scene'] == scene]     # filters DF for a specific scene
-        log_path = f"{out_path}/{scene}-{time}_ICP.log"
+        df_scene = df[df['Scene'] == scene]                 # filters DF for a specific scene
+        log_path = f"{logs_folder}/{scene}_ICP.log"
+        nFrags = nFrags_dict[scene]
         print("writing:", log_path)
-        write_log(df_scene, log_path, nFrags_perScene, dataset, split)
+        write_log(df_scene, log_path, nFrags)
 
-nFrags_perScene = 2                                 # <<< FILL
-out_path = f"../output/ICP_Pipeline/logs/{time}"    # <<< FILL
-
-generate_output(results, nFrags_perScene, '3DMatch', 'test', out_path)
+save_registration_logs(results, subset, dataset, split, output_folder)
 
 
-# ## 5.2 Results Analysis
-# 
-# Notice that after applying our pipeline to a full split, we will obtain a table in which each row corresponds to one specific alignment. Hence, we can create a new table to present the overall results (errors/performance) for all clouds of each scene and of the whole split we selected from the dataset. In this way, we can obtain a summary of the overall performance of the ICP algorithm.
+# We can then use these `.log` files in the MATLAB script
+# to evaluate the results in terms of precision and recall.
 
-# In[38]:
+# This will produce a `.csv` file. You can then import and visualize it here.
 
+eval_csv_path = f"{output_folder}/evaluation/registration_evaluation_ICP.csv"
+if os.path.isfile(eval_csv_path):
+    reg_eval_ICP = pd.read_csv(eval_csv_path)
+    print("============================================== Evaluation Table ==============================================")
+    print(reg_eval_ICP.to_string(index=False))
+    print("============================================================================================================")
+else:
+    print(f'No file found at: {eval_csv_path}\nPlease insert the .csv file with the obtained evaluation results in the expected path with the expected file name')
+
+
+
+# 5.3 Results Analysis
+# Notice that after applying our pipeline to a full split, we
+# will obtain a table in which each row corresponds to one specific
+# alignment. Hence, we can create a new table to present the overall
+# results (errors/performance) for all clouds of each scene and of
+# the whole split we selected from the dataset. In this way, we can
+# obtain a summary of the overall performance of the ICP algorithm.
 
 def assess_results(results):
     """
@@ -633,27 +630,18 @@ def assess_results(results):
                                "Mean Inlier RMSE": analysis["Mean Inlier RMSE"].mean()}, index=[0])
     analysis = pd.concat([analysis, total_mean], ignore_index=True)                                     # add total split average
 
+    # ensures the evaluation folder is present
+    if not os.path.isdir(f"{output_folder}/evaluation"):
+        os.makedirs(f"{output_folder}/evaluation")
+    
+    # save the obtained registration results summary table as a .csv in the output folder
+    filename = f"{output_folder}/evaluation/mean_fitness_and_RMSE_table_ICP.csv"
+    analysis.to_csv(filename, index=False)
+    print(f'Registration results summary table saved at: {filename}')
+
     return analysis
 
-
-# In[39]:
-
-
 analysis = assess_results(results)
-#display(analysis)
-
-filename = f"../output/ICP_Pipeline/Analysis_1_Pair_Testing-{time}_ICP.csv"
-analysis.to_csv(filename, index=False)
-
-
-# ---
-# 
-# ### Appendix
-# 
-# During the development of this notebook, it was noticed that some clouds had more than 1 scan. For instance, in the "7-scenes-head" scene of the validation split, we had scan 14, 14 (1) and 14 (2).
-# 
-# Hence, to verify if these were different scans or not, here we compared the initial error of the relative pose between them. These results are shown in the image bellow:
-# 
-# ![image.png](attachment:image.png)
-# 
-# Since the fitness is 100% and the inlier RMSE is 0, we conclude that all clouds are the same, so it is ok to consider only one of them as was done during this implementation.
+print("============================================== Analysis Table ==============================================")
+print(analysis.to_string(index=False))
+print("============================================================================================================")
