@@ -73,28 +73,39 @@ else:
 # the whole implementation of this method as well as details on how this benchmark
 # is performed, please refer to: https://github.com/gabriel-corteletti/FCGF
 
-subset = 3
+subset = False
 voxel_size = 0.025
 inlier_th = 0.05            # 5 cm --> this must be the same for ICP
 model = fcgf_weight_path
 
-run_name = "script_test_subset3"
+run_name = "FCGF_test_complete"
 
 time = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime('%Y-%m-%d_%H-%M-%S')
 output_folder = f"../output/FCGF/{run_name}-{time}"
 feature_path = f"{output_folder}/features"
 
-subprocess.run([
-    "python", "../source/FCGF/scripts/benchmark_3dmatch.py",
-    "--source", test_path,
-    "--target", feature_path,
-    "--voxel_size", str(voxel_size),
-    "--subset", str(subset),
-    "--model", model,
-    "--extract_features",
-    "--evaluate_feature_match_recall",
-    "--evaluate_registration"],
-    check=True)
+def run_benchmark(test_path, feature_path, voxel_size, subset, model):
+    # Start with the required arguments
+    args = [
+        "python", "../source/FCGF/scripts/benchmark_3dmatch.py",
+        "--source", test_path,
+        "--target", feature_path,
+        "--voxel_size", str(voxel_size),
+        "--model", model,
+        "--extract_features",
+        "--evaluate_feature_match_recall",
+        "--evaluate_registration",
+    ]
+    
+    # Conditionally add the subset flag if it isn't False
+    if subset is not False:
+        args += ["--subset", str(subset)]
+    
+    # Run it
+    subprocess.run(args, check=True)
+    return
+
+run_benchmark(test_path, feature_path, voxel_size, subset, model)
 
 
 

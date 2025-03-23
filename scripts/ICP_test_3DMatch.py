@@ -454,9 +454,9 @@ voxel_size = 0.05            # best_voxel_size obtained at last validation
 inlier_th = 0.05             # 5 cm --> this must be the same for ICP
 dataset = "3DMatch"                        
 split = 'test'
-subset = True
+subset = False
 
-run_name = "script_test_subset3"
+run_name = "ICP_test_complete"
 
 time = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime('%Y-%m-%d_%H-%M-%S')
 output_folder = f"../output/ICP_Pipeline/{run_name}-{time}"
