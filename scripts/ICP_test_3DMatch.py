@@ -12,6 +12,8 @@ import os
 import io
 import sys
 import shutil
+import time
+from functools import wraps
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextlib import redirect_stdout
@@ -125,6 +127,30 @@ get_split(data)
 
 # 3 ICP Pipeline Implementation (Global Registration — FPFH + RANSAC — and Local Refinement — ICP)
 
+# A global dict that accumulates total elapsed time for each named stage
+# Keys are stage names (strings), values are floats (seconds)
+total_stage_times = defaultdict(float)
+
+def timer(stage_name):
+    """
+    Decorator factory: creates a decorator that wraps a function,
+    measures its execution time, and adds that time to
+    total_stage_times[stage_name]
+    OBS: uses a decorator factory to be able to do @time('name of the stage')
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = func(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            total_stage_times[stage_name] += elapsed            
+            return result
+        return wrapper
+    return decorator
+
+
+@timer('preprocessing')
 def preprocess_cloud(pcd, voxel_size):
     """
     Performs the preprocessing of a given cloud. Thus, this function:
@@ -154,7 +180,7 @@ def preprocess_cloud(pcd, voxel_size):
     return pcd_down, pcd_fpfh
 
 
-
+@timer('ransac')
 def execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpfh, inlier_th, voxel_size):
     """
     Executes the Global Registration (through RANSAC algorithm) of
@@ -185,7 +211,7 @@ def execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpf
     return global_registration
 
 
-
+@timer('icp')
 def execute_ICPrefinement(source, target, inlier_th, trans_init, voxel_size):
     """
     Executes the local ICP refinement of a initial transformation.
@@ -542,6 +568,10 @@ def execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name
     # Merge the iteration information into the main results DataFrame
     results = augment_results(results, captured_output)
 
+    print('============================================== Time Summary ==============================================')
+    for stage, t in total_stage_times.items():
+        print(f"{stage} total time = {t:.5f}s")
+
     return output_folder, results
 
 
@@ -553,7 +583,7 @@ dataset = "3DMatch"
 split = 'test'
 subset = False                # set to False to run all samples
 
-run_name = "ICP_test_complete_wIterations"
+run_name = "ICP_test_time_estimation"
 
 output_folder, results = execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name)
 

@@ -12,11 +12,13 @@ import io
 import sys
 import copy
 import math
+import time
 import shutil
 import subprocess
 import numpy as np
 import pandas as pd
 import open3d as o3d
+from functools import wraps
 from urllib.request import urlretrieve
 from collections import defaultdict
 from datetime import datetime
@@ -99,6 +101,29 @@ def get_transformation_from_content(content: list[str], line_idx: int) -> np.nda
 
 ## 3.2 Adding an ICP Stage
 
+# A global dict that accumulates total elapsed time for each named stage
+# Keys are stage names (strings), values are floats (seconds)
+total_stage_times = defaultdict(float)
+
+def timer(stage_name):
+    """
+    Decorator factory: creates a decorator that wraps a function,
+    measures its execution time, and adds that time to
+    total_stage_times[stage_name]
+    OBS: uses a decorator factory to be able to do @time('name of the stage')
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = func(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            total_stage_times[stage_name] += elapsed            
+            return result
+        return wrapper
+    return decorator
+
+@timer('icp')
 def execute_ICPrefinement(source, target, inlier_th, trans_init, voxel_size):
     """Executes the local ICP refinement for an initial transformation.
 
@@ -580,6 +605,17 @@ def execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_n
     print('-------------------------------------------------------------------------------------------------------')
     print(f'Registration results table saved at: {filename}')
 
+    # Retrieve times of preprocessing and ransac (handled by FCGF/scripts/benchmark_3dmatch.py) and summarize time results
+    last_lines = ransac_captured_output.strip().splitlines()[-2:]       # break captured output into lines and
+    for line in last_lines:                                             # look at only the last two lines, where time is printed
+        line = line.strip().split()                                     # clean the line
+        total_stage_times[line[0]] = float(line[-1].replace('s',''))    # {stage} total time = X.XXXXXs
+    print('============================================== Time Summary ==============================================')
+    stages_list = ['preprocessing', 'ransac', 'icp']
+    for stage in stages_list:
+        t = total_stage_times[stage]
+        print(f"{stage} total time = {t:.5f}s")
+
     return output_folder, results
 
 # 6 Testing
@@ -590,7 +626,7 @@ voxel_size = 0.025
 inlier_th = 0.05            # 5 cm --> this must be the same for ICP
 model = fcgf_weight_path
 
-run_name = "FCGF_test_complete_wIterations"
+run_name = "FCGF_test_time_estimation"
 
 output_folder, results = execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_name)
 print("============================================== Registration Table ==============================================")
