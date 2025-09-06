@@ -1,11 +1,25 @@
+# This script was produced from the notebook available at ../notebooks/5-FCGF.ipynb
+# For further details on this code, check the aforementioned notebook
+
 # 1 Setting Up the Environment
+ 
+# Follow the steps presented at the `README.md` file to install both PyTorch and
+# the Minkowski Engine. And check below if the installation was successful.
+
+# Before proceding, notice that the cell below should be uncommented only if you
+# plan to run the benchmark with pepper noise simulation. If you are not using the
+# noise generator or is using it without the pepper mode turned on, leave this
+# commented for better performance. For more details on this, refer to section
+# 3.3.1 Note About Adding this Noise Generator Module in Scripts with MinkowskiEngine.
+
+# import os
+# os.environ["OMP_NUM_THREADS"] = "1"
+
 
 import MinkowskiEngine as ME
 print(f'MinkowskiEngine version: {ME.__version__}')
 import torch
 print(f'PyTorch version: {torch.__version__}')
-
-# After that, we just need to import everything we are going to use.
 
 import os
 import io
@@ -14,6 +28,7 @@ import copy
 import math
 import time
 import shutil
+import logging
 import subprocess
 import numpy as np
 import pandas as pd
@@ -28,7 +43,6 @@ from contextlib import redirect_stdout
 
 # Get the absolute path of the source directory
 sys.path.append(os.path.abspath("../source/FCGF"))
-
 
 # 2 Input Data
 
@@ -47,8 +61,9 @@ else:
 # else:
 #     print(f'The data is already available at {train_path}')
 
+
 # Check if the weight folder has already been created, otherwise creates it
-fcgf_weights_folder = '../weigths/FCGF'
+fcgf_weights_folder = '../weights/FCGF'
 if not os.path.exists(fcgf_weights_folder):
     os.makedirs(fcgf_weights_folder)
 
@@ -63,8 +78,178 @@ else:
     print(f'Selected weights already available at {fcgf_weight_path}')
 
 
-# 3 Local Refinement
-## 3.1 Retrieving Transformations from Logs
+# 3 Auxiliary Functions
+
+# 3.1 Visualization (Not Applicable for the script case)
+
+# 3.2 Timer Decorator
+
+# A global dict that accumulates total elapsed time for each named stage
+# Keys are stage names (strings), values are floats (seconds)
+total_stage_times = defaultdict(float)
+
+def timer(stage_name):
+    """
+    Decorator factory: creates a decorator that wraps a function,
+    measures its execution time, and adds that time to
+    total_stage_times[stage_name]
+    OBS: uses a decorator factory to be able to do @time('name of the stage')
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = func(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            total_stage_times[stage_name] += elapsed            
+            return result
+        return wrapper
+    return decorator
+
+
+# 3.3 Noise Generator
+
+def add_noise(pcd: o3d.geometry.PointCloud, seed: int = 42, fixed: bool = True,
+                       sigma: float = 0.0, sigma_max: float = 0.05,
+                       spike_ratio: float = 0.0, spike_min: float = 0.2, spike_max: float = 1.0, spike_skew: float = 2.0,
+                       pepper_ratio: float = 0.0) -> o3d.geometry.PointCloud:
+    """
+    Returns a copy of `pcd` with:
+      1) Gaussian noise (fixed or varying sigma)
+      2) Optional spike noise on a given percentage of points
+      3) Optional "pepper" noise: randomly remove a percentage of points
+
+    Modes:
+      - fixed=True:  all points get noise ~N(0, sigma²)
+      - fixed=False: each point i draws sigma_i ~ Uniform[`sigma`, `sigma_max`], then noise ~N(0, sigma_ᵢ²).
+      - sigma=0.0 AND fixed=True: no Gaussian noise
+      - sigma=0.0 AND sigma_max=0.0 AND fixed=False: no Gaussian noise
+      - spike_ratio=0.0: no spike readings
+      - spike_ratio>0.0: then given (ideally small) ratio of points is affected by a huge error
+      - pepper_ratio=0.0: no points removed
+      - pepper_ratio>0.0: fraction of points is randomly dropped
+
+    Args:
+        pcd:           input Open3D PointCloud
+        seed:          RNG seed for reproducibility
+        fixed:         whether to use a single global sigma (True) or per-point sigma (False)
+        sigma:         lower‐bound (or sole) standard deviation
+        sigma_max:     upper‐bound standard deviation when fixed=False
+        spike_ratio:   fraction of points to turn into spikes (0.0 – 1.0)
+        spike_min      minimum spike magnitude
+        spike_max      maximum spike magnitude
+        spike_skew     exponent to skew magnitude distribution (>1 to produce more small spikes)
+        pepper_ratio:  fraction of points to randomly remove (0.0–1.0)
+
+    Returns:
+        A new Open3D PointCloud with noisy points.
+    """
+
+    # 1) Convert points to an (N,3) NumPy array
+    pts = np.asarray(pcd.points)
+    N = pts.shape[0]                # number of points
+
+    # 2) Fix random seed
+    rng = np.random.default_rng(seed)
+
+    # 3) Generate Gaussian noise
+    if fixed:
+        if sigma > 0.0:
+            # Sample noise ~ N(0, sigma^2) for each coordinate of each point
+            noise = rng.normal(loc=0.0, scale=sigma, size=(N, 3))
+        else:
+            noise = np.zeros((N,3))
+    else:
+        if sigma_max > 0.0:
+            # Sample a sigma for each point
+            sigmas_arr = rng.uniform(sigma, sigma_max, size=(N,1))  # shape (N,1)
+            # Use the varying sigma to generate the noise
+            noise = rng.normal(loc=0.0, scale=sigmas_arr, size=(N,3))
+        else:
+            noise = np.zeros((N,3))
+    pts_noisy = pts + noise
+
+    # 4) Generate Spike Noise
+    if spike_ratio > 0.0:
+        n_spikes = int(np.floor(spike_ratio * N))                   # number of spikes to be produced
+        spike_idxs = rng.choice(N, size=n_spikes, replace=False)    # randomly select indices of points to be affected
+
+        # Gerate variable magnitude
+        u = rng.random(n_spikes)                                    # draw from uniform distribution from 0.0 to 1.0
+        mags = spike_min + (spike_max - spike_min)*(u**spike_skew)  # magnitude between the given boundaries with a positive skew
+        mags = mags.reshape(-1,1)                                   # shape=(n_spikes,1)
+
+        # Create unit‐length random directions for each spike
+        directions = rng.normal(size=(n_spikes, 3))                 # generate a n_spikes x 3 matrix where each row is a random 3D vector
+        norms = np.linalg.norm(directions, axis=1, keepdims=True)   # compute the euclidian length (L2 norm) of each row (axis=1) keeping the n_spikes x 3 dimension
+        directions = directions/norms                               # convert the random vectors to unit vector
+
+        # Scale to the magnitude
+        spike_offsets = directions*mags
+
+        # Inject spikes
+        pts_noisy[spike_idxs] += spike_offsets
+
+    # Salt-and-pepper noise
+    if pepper_ratio > 0.0:
+        min_points_kept = 1000
+        target_drop   = int(np.floor(pepper_ratio * N))             # compute number of points we want to "turned off"
+        max_drop = max(0, N - min_points_kept)                      # but never drop so many that <min_points_kept remain:
+        n_drop   = min(target_drop, max_drop)                       # cap the drop at a certain maximum
+        if n_drop < target_drop:
+            logging.warning(
+                f"pepper_ratio={pepper_ratio:.3f} would drop {target_drop} pts,"
+                f"clamping to {n_drop} to keep ≥{min_points_kept} points."
+            )
+        drop_idx = rng.choice(N, size=n_drop, replace=False)        # randomly select which points will be 'turned off'
+        mask = np.ones(N, dtype=bool)                               # initialize an all-True mask with the length equal to the number of points
+        mask[drop_idx] = False                                      # set the mask to False at the selected points
+
+        pts_noisy = pts_noisy[mask]                                 # apply the mask to the points
+
+        # Drop corresponding attributes (if any)
+        colors = np.asarray(pcd.colors)[mask] if pcd.has_colors() else None
+        normals = np.asarray(pcd.normals)[mask] if pcd.has_normals() else None
+
+    # If no salt-and-pepper noise, preserve all attributes (if any)
+    else:
+        colors  = np.asarray(pcd.colors)  if pcd.has_colors()  else None
+        normals = np.asarray(pcd.normals) if pcd.has_normals() else None
+
+    # 6) Create a new point cloud (so the original remains unchanged)
+    noisy_pcd = o3d.geometry.PointCloud()
+    noisy_pcd.points = o3d.utility.Vector3dVector(pts_noisy)
+    if colors is not None:
+        noisy_pcd.colors = o3d.utility.Vector3dVector(colors)
+    if normals is not None:
+        noisy_pcd.normals = o3d.utility.Vector3dVector(normals)
+
+    return noisy_pcd
+
+
+def read_pcd(pcd_path: str, **noise_kwargs) -> o3d.geometry.PointCloud:
+    """
+    Loads a point cloud from a given file path and (optionally) apply noise.
+    Check `add_noise` documentation for details on noise settings
+    
+    Args:
+        pcd_path:         path to the file containing the point cloud data
+        **noise_kwargs:   passed directly to `add_noise`, which supports:
+                            - fixed, sigma, sigma_max,
+                            - spike_ratio, spike_min, spike_max, spike_skew,
+                            - pepper_ratio.
+
+    Returns:
+        The loaded (and possibly noised) point cloud.
+    """
+
+    pcd = o3d.io.read_point_cloud(pcd_path)
+    pcd = add_noise(pcd, **noise_kwargs)    
+    return pcd
+
+# 4 Local Refinement
+
+# 4.1 Retrieving Transformations from Logs
 
 def get_transformation_from_content(content: list[str], line_idx: int) -> np.ndarray:
     """Extract the 4×4 transformation matrix from pre-loaded log lines.
@@ -99,29 +284,7 @@ def get_transformation_from_content(content: list[str], line_idx: int) -> np.nda
     return np.array(transformation)
 
 
-## 3.2 Adding an ICP Stage
-
-# A global dict that accumulates total elapsed time for each named stage
-# Keys are stage names (strings), values are floats (seconds)
-total_stage_times = defaultdict(float)
-
-def timer(stage_name):
-    """
-    Decorator factory: creates a decorator that wraps a function,
-    measures its execution time, and adds that time to
-    total_stage_times[stage_name]
-    OBS: uses a decorator factory to be able to do @time('name of the stage')
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            start = time.perf_counter()
-            result = func(*args, **kwargs)
-            elapsed = time.perf_counter() - start
-            total_stage_times[stage_name] += elapsed            
-            return result
-        return wrapper
-    return decorator
+# 4.2 Adding an ICP Stage
 
 @timer('icp')
 def execute_ICPrefinement(source, target, inlier_th, trans_init, voxel_size):
@@ -178,7 +341,7 @@ def write_refined_log(icp_log_path, tgt_ID, src_ID, nFrags, transformation):
             f.write(f'{line}\n')
 
 
-def ICP_stage(output_folder, test_path, inlier_th, voxel_size):
+def ICP_stage(output_folder, test_path, inlier_th, voxel_size, **noise_kwargs):
     """
     Run a full ICP pipeline over all initial guesses logs and collect results.
 
@@ -254,8 +417,8 @@ def ICP_stage(output_folder, test_path, inlier_th, voxel_size):
                 nFrags = int(line[2])
 
                 # Load the related point clouds
-                source = o3d.io.read_point_cloud(os.path.join(test_path, scene, 'cloud_bin_%s.ply' %src_ID))
-                target = o3d.io.read_point_cloud(os.path.join(test_path, scene, 'cloud_bin_%s.ply' %tgt_ID))
+                source = read_pcd(os.path.join(test_path, scene, 'cloud_bin_%s.ply' %src_ID), **noise_kwargs)
+                target = read_pcd(os.path.join(test_path, scene, 'cloud_bin_%s.ply' %tgt_ID), **noise_kwargs)
                 
                 # Retrieves the RANSAC transformation of the pair
                 ransac_tran = get_transformation_from_content(content, i)
@@ -302,8 +465,7 @@ def ICP_stage(output_folder, test_path, inlier_th, voxel_size):
     return results_table
 
 
-
-# 4 Iteration Counter
+# 5 Iteration Counter
 
 def get_iterations(captured_output, stage: Literal['RANSAC', 'ICP']):
     """
@@ -457,7 +619,8 @@ class Tee(io.StringIO):
         sys.__stdout__.flush()
         super().flush()
 
-# 5 Defining the Complete Pipeline
+
+# 6 Defining the Complete Pipeline
 
 def check_feasible_subset(subset: int) -> None:
     """
@@ -499,7 +662,8 @@ def check_feasible_subset(subset: int) -> None:
             f"--> Nearest larger  feasible subset: {P_upper}"
         )
 
-def run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model, stdout=None):
+
+def run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model, stdout=None, **noise_kwargs):
     """
     Invoke the 3DMatch benchmark script via subprocess, streaming its stdout
     to both the real console and an optional buffer.
@@ -512,7 +676,7 @@ def run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model,
         "--target", feature_path,                      # features output directory
         "--voxel_size", str(voxel_size),               # downsampling parameter
         "--inlier_th", str(inlier_th),                 # inlier threshold
-        "--model", model,                              # FCGF model weigths
+        "--model", model,                              # FCGF model weights
         "--extract_features",                          # first stage: extract features
         "--evaluate_feature_match_recall",             # compute match recall
         "--evaluate_registration",                     # run geometric registration
@@ -522,6 +686,18 @@ def run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model,
     if subset:
         args += ["--subset", str(subset)]
     
+    # translate noise_kwargs into CLI flags
+    for k, v in noise_kwargs.items():
+        # handle the boolean Truee = --fixed / False = --no-fixed
+        if k == "fixed":
+            if v:
+                args.append("--fixed")
+            else:
+                args.append("--no-fixed")
+        else:
+            # all other noise settings take a value
+            args += [f"--{k}", str(v)]
+
     # Launch the child process with its stdout piped back to us
     proc = subprocess.Popen(
         args,
@@ -530,7 +706,6 @@ def run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model,
         text=True,               # decode output as text (not bytes)
         bufsize=1                # line-buffered mode for timely output
     )
-
 
     # Read each line from the child’s stdout as it arrives
     for line in proc.stdout:
@@ -548,7 +723,8 @@ def run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model,
     if ret != 0:
         raise subprocess.CalledProcessError(ret, args)
 
-def execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_name):
+
+def execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_name, **noise_kwargs):
     """Run the full FCGF pipeline: feature extraction, RANSAC, and ICP.
 
     Args:
@@ -580,7 +756,7 @@ def execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_n
     # Set Open3D's verbosity level to Debug to capture detailed iteration information
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Debug)
     # Execute FCGF with only the RANSAC stage
-    run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model, ransac_tee_buffer)
+    run_benchmark(test_path, feature_path, voxel_size, inlier_th, subset, model, ransac_tee_buffer, **noise_kwargs)
     # Returns Open3D's verbosity level to default mode
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
     # Retrieve the captured output as a string
@@ -592,18 +768,19 @@ def execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_n
     # Redirect stdout to the Tee object during ICP execution
     with redirect_stdout(icp_tee_buffer):
         o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Debug)
-        results = ICP_stage(output_folder, test_path, inlier_th, voxel_size)
+        results = ICP_stage(output_folder, test_path, inlier_th, voxel_size, **noise_kwargs)
         o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
     icp_captured_output = icp_tee_buffer.getvalue()
 
     # Merge the iteration information into the main results DataFrame
     results = augment_results(results, ransac_captured_output, icp_captured_output)
 
-    # save the obtained table as a .csv in the output folder
+    # Save the obtained table as a .csv in the output folder
     filename = f"{output_folder}/registration/registration_table_FCGF.csv"
     results.to_csv(filename, index=False)
     print('-------------------------------------------------------------------------------------------------------')
     print(f'Registration results table saved at: {filename}')
+    
 
     # Retrieve times of preprocessing and ransac (handled by FCGF/scripts/benchmark_3dmatch.py) and summarize time results
     last_lines = ransac_captured_output.strip().splitlines()[-2:]       # break captured output into lines and
@@ -618,24 +795,36 @@ def execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_n
 
     return output_folder, results
 
-# 6 Testing
 
+# 7 Testing
 
-subset = False
-voxel_size = 0.025
+subset = False              # set to False to test all samples
+voxel_size = 0.025          # 2.5 cm
 inlier_th = 0.05            # 5 cm --> this must be the same for ICP
 model = fcgf_weight_path
 
-run_name = "FCGF_test_time_estimation"
+fixed = False
+sigma_min = 0.01    # 1 cm
+sigma_max = 0.05    # 5 cm
+spike_ratio = 0.000 # 0.5%
+spike_min = 0.0     # 10 cm
+spike_max = 0.0     # 50 cm
+spike_skew = 2.0    # positive skew
+pepper_ratio = 0.00 # 1%
+noise_kwargs = {'seed': 42, 'fixed': fixed, 'sigma': sigma_min, 'sigma_max': sigma_max,
+                'spike_ratio': spike_ratio, 'spike_min': spike_min, 'spike_max': spike_max,
+                'spike_skew': spike_skew, 'pepper_ratio': pepper_ratio}
 
-output_folder, results = execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_name)
+run_name = "FCGF_complete_noise_gaussian"
+
+output_folder, results = execute_FCGF_Pipeline(voxel_size, inlier_th, subset, model, test_path, run_name, **noise_kwargs)
+
 print("============================================== Registration Table ==============================================")
 print(results.to_string(index=False))
 print("================================================================================================================")
 
 
-
-## 6.1 Quantitative Analysis
+# 7.1 Quantitative Analysis
 
 def get_matching_pairs(file):
     """
@@ -790,6 +979,7 @@ def get_reducedGT(output_folder, test_path):
             
     print(f'Reduced ground truth files saved at: {out_gt_path}')
 
+
 get_reducedGT(output_folder, test_path)
 
 
@@ -816,10 +1006,11 @@ def assess_results(results):
     """
 
     # 1) Compute per-scene mean
-    #    (Dropping 'Source','Target','Transformation' from the grouping)
+    #    Dropping 'Source','Target','Transformation' from the grouping
+    #    And, for each "col+group" filter out the 0 entries
     analysis_mean = results.copy()                                                                              # create a copy of results
     analysis_mean = analysis_mean.drop(["Source", "Target", "Initial Guess", "Transformation"], axis="columns")  # remove unnecessary columns
-    analysis_mean = analysis_mean.groupby("Scene").mean().reset_index()                                         #  compute the averages of each scene
+    analysis_mean = analysis_mean.groupby("Scene").agg(lambda x: x[x != 0].mean()).reset_index()                                    #  compute the averages of each scene
     analysis_mean = analysis_mean.rename(columns={"RANSAC: Fitness": "RANSAC: Mean Fitness",
                                                   "ICP: Fitness": "ICP: Mean Fitness",
                                                   "RANSAC: Inlier RMSE": "RANSAC: Mean Inlier RMSE",
@@ -844,27 +1035,27 @@ def assess_results(results):
 
     # 4) Compute overall means (using per-scene means) and overall std (using all samples) 
     total = pd.DataFrame({"Scene": "TOTAL",
-                          "Mean RANSAC Iterations": analysis_mean["Mean RANSAC Iterations"].mean(),
-                          "STD RANSAC Iterations": [results["RANSAC Iterations"].std()],
-                          "Mean ICP Iterations": analysis_mean["Mean ICP Iterations"].mean(),
-                          "STD ICP Iterations": [results["ICP Iterations"].std()],
-                          "RANSAC: Mean Fitness": analysis_mean["RANSAC: Mean Fitness"].mean(),
-                          "RANSAC: STD Fitness": [results["RANSAC: Fitness"].std()],
-                          "ICP: Mean Fitness": analysis_mean["ICP: Mean Fitness"].mean(),
-                          "ICP: STD Fitness": [results["ICP: Fitness"].std()],
-                          "RANSAC: Mean Inlier RMSE": analysis_mean["RANSAC: Mean Inlier RMSE"].mean(),
-                          "RANSAC: STD Inlier RMSE": [results["RANSAC: Inlier RMSE"].std()],
-                          "ICP: Mean Inlier RMSE": analysis_mean["ICP: Mean Inlier RMSE"].mean(),
-                          "ICP: STD Inlier RMSE": [results["ICP: Inlier RMSE"].std()]}, index=[0])
+                          "Mean RANSAC Iterations": results["RANSAC Iterations"][results["RANSAC Iterations"] != 0].mean(),
+                          "STD RANSAC Iterations": results["RANSAC Iterations"].std(),
+                          "Mean ICP Iterations": results["ICP Iterations"].mean(),
+                          "STD ICP Iterations": results["ICP Iterations"].std(),
+                          "RANSAC: Mean Fitness": results["RANSAC: Fitness"].mean(),
+                          "RANSAC: STD Fitness": results["RANSAC: Fitness"].std(),
+                          "ICP: Mean Fitness": results["ICP: Fitness"].mean(),
+                          "ICP: STD Fitness": results["ICP: Fitness"].std(),
+                          "RANSAC: Mean Inlier RMSE": results["RANSAC: Inlier RMSE"].mean(),
+                          "RANSAC: STD Inlier RMSE": results["RANSAC: Inlier RMSE"].std(),
+                          "ICP: Mean Inlier RMSE": results["ICP: Inlier RMSE"].mean(),
+                          "ICP: STD Inlier RMSE": results["ICP: Inlier RMSE"].std()}, index=[0])
 
     # 5) Compute the inter_scene std deviation using the per-scene means
     inter_scenes_std = pd.DataFrame({"Scene": "Inter-Scene STD",
-                                     "RANSAC: STD Fitness": [analysis["RANSAC: Mean Fitness"].std()],
-                                     "ICP: STD Fitness": [analysis["ICP: Mean Fitness"].std()],
-                                     "RANSAC: STD Inlier RMSE": [analysis["RANSAC: Mean Inlier RMSE"].std()],
-                                     "ICP: STD Inlier RMSE": [analysis["ICP: Mean Inlier RMSE"].std()],
-                                     "STD RANSAC Iterations": [analysis["Mean RANSAC Iterations"].std()],
-                                     "STD ICP Iterations": [analysis["Mean ICP Iterations"].std()],
+                                     "RANSAC: STD Fitness": analysis["RANSAC: Mean Fitness"].std(),
+                                     "ICP: STD Fitness": analysis["ICP: Mean Fitness"].std(),
+                                     "RANSAC: STD Inlier RMSE": analysis["RANSAC: Mean Inlier RMSE"].std(),
+                                     "ICP: STD Inlier RMSE": analysis["ICP: Mean Inlier RMSE"].std(),
+                                     "STD RANSAC Iterations": analysis["Mean RANSAC Iterations"].std(),
+                                     "STD ICP Iterations": analysis["Mean ICP Iterations"].std(),
                                      # Leave the "mean" columns of the inter-scene std row blank
                                      "RANSAC: Mean Fitness": "",
                                      "ICP: Mean Fitness": "",
@@ -894,6 +1085,10 @@ def assess_results(results):
 
 
 analysis = assess_results(results)
+
 print("============================================== Analysis Table ==============================================")
 print(analysis.to_string(index=False))
 print("============================================================================================================")
+
+
+# 7.2 Qualitative Analysis (Not Applicable for the script case)

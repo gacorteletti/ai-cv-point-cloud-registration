@@ -1,4 +1,5 @@
-# 1 Setting Up the Environment
+# This script was produced from the notebook available at ../notebooks/3-ICP_Pipeline_Datasets.ipynb
+# For further details on this code, check the aforementioned notebook
 
 from collections import defaultdict
 from sklearn.preprocessing import MinMaxScaler
@@ -7,6 +8,7 @@ import numpy as np
 import pandas as pd
 import urllib.request
 import zipfile
+import logging
 import copy
 import os
 import io
@@ -17,7 +19,6 @@ from functools import wraps
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextlib import redirect_stdout
-
 
 
 # 2 Input Data
@@ -38,7 +39,6 @@ if not os.path.exists(file_path):
     print("Download completed.")
 else:
     print(f"{file_name} already exists, skipping download.")
-
 
 # Unzip the file if not already extracted
 temp_extract_path = os.path.join(download_folder, os.path.splitext(file_name)[0])  # "3dmatch"
@@ -80,7 +80,6 @@ else:
 print("Dataset is ready!")
 
 
-
 data = {}                                               #HashMap of scenes for each dataset
 data_root = "../data" 
 datasets = ['3DMatch']      #os.listdir(data_root)                        #list of all datasets
@@ -96,7 +95,6 @@ for dataset in datasets:                                #for each dataset
     data[dataset] = scenes                              #save all splits for the dataset
 
 print(data)
-
 
 
 def get_split(data):
@@ -124,8 +122,11 @@ def get_split(data):
 get_split(data)
 
 
+# 3 Auxiliary Functions
 
-# 3 ICP Pipeline Implementation (Global Registration — FPFH + RANSAC — and Local Refinement — ICP)
+# 3.1 Visualization (Not Applicable for the script case)
+
+# 3.2 Timer Decorator
 
 # A global dict that accumulates total elapsed time for each named stage
 # Keys are stage names (strings), values are floats (seconds)
@@ -134,8 +135,7 @@ total_stage_times = defaultdict(float)
 def timer(stage_name):
     """
     Decorator factory: creates a decorator that wraps a function,
-    measures its execution time, and adds that time to
-    total_stage_times[stage_name]
+    measures its execution time, and adds that time to total_stage_times[stage_name]
     OBS: uses a decorator factory to be able to do @time('name of the stage')
     """
     def decorator(func):
@@ -149,6 +149,149 @@ def timer(stage_name):
         return wrapper
     return decorator
 
+
+# 3.3 Noise Generator
+
+def add_noise(pcd: o3d.geometry.PointCloud, seed: int = 42, fixed: bool = True,
+                       sigma: float = 0.0, sigma_max: float = 0.05,
+                       spike_ratio: float = 0.0, spike_min: float = 0.2, spike_max: float = 1.0, spike_skew: float = 2.0,
+                       pepper_ratio: float = 0.0) -> o3d.geometry.PointCloud:
+    """
+    Returns a copy of `pcd` with:
+      1) Gaussian noise (fixed or varying sigma)
+      2) Optional spike noise on a given percentage of points
+      3) Optional "pepper" noise: randomly remove a percentage of points
+
+    Modes:
+      - fixed=True:  all points get noise ~N(0, sigma²)
+      - fixed=False: each point i draws sigma_i ~ Uniform[`sigma`, `sigma_max`], then noise ~N(0, sigma_ᵢ²).
+      - sigma=0.0 AND fixed=True: no Gaussian noise
+      - sigma=0.0 AND sigma_max=0.0 AND fixed=False: no Gaussian noise
+      - spike_ratio=0.0: no spike readings
+      - spike_ratio>0.0: then given (ideally small) ratio of points is affected by a huge error
+      - pepper_ratio=0.0: no points removed
+      - pepper_ratio>0.0: fraction of points is randomly dropped
+
+    Args:
+        pcd:           input Open3D PointCloud
+        seed:          RNG seed for reproducibility
+        fixed:         whether to use a single global sigma (True) or per-point sigma (False)
+        sigma:         lower‐bound (or sole) standard deviation
+        sigma_max:     upper‐bound standard deviation when fixed=False
+        spike_ratio:   fraction of points to turn into spikes (0.0 – 1.0)
+        spike_min      minimum spike magnitude
+        spike_max      maximum spike magnitude
+        spike_skew     exponent to skew magnitude distribution (>1 to produce more small spikes)
+        pepper_ratio:  fraction of points to randomly remove (0.0–1.0)
+
+    Returns:
+        A new Open3D PointCloud with noisy points.
+    """
+
+    # 1) Convert points to an (N,3) NumPy array
+    pts = np.asarray(pcd.points)
+    N = pts.shape[0]                # number of points
+
+    # 2) Fix random seed
+    rng = np.random.default_rng(seed)
+
+    # 3) Generate Gaussian noise
+    if fixed:
+        if sigma > 0.0:
+            # Sample noise ~ N(0, sigma^2) for each coordinate of each point
+            noise = rng.normal(loc=0.0, scale=sigma, size=(N, 3))
+        else:
+            noise = np.zeros((N,3))
+    else:
+        if sigma_max > 0.0:
+            # Sample a sigma for each point
+            sigmas_arr = rng.uniform(sigma, sigma_max, size=(N,1))  # shape (N,1)
+            # Use the varying sigma to generate the noise
+            noise = rng.normal(loc=0.0, scale=sigmas_arr, size=(N,3))
+        else:
+            noise = np.zeros((N,3))
+    pts_noisy = pts + noise
+
+    # 4) Generate Spike Noise
+    if spike_ratio > 0.0:
+        n_spikes = int(np.floor(spike_ratio * N))                   # number of spikes to be produced
+        spike_idxs = rng.choice(N, size=n_spikes, replace=False)    # randomly select indices of points to be affected
+
+        # Gerate variable magnitude
+        u = rng.random(n_spikes)                                    # draw from uniform distribution from 0.0 to 1.0
+        mags = spike_min + (spike_max - spike_min)*(u**spike_skew)  # magnitude between the given boundaries with a positive skew
+        mags = mags.reshape(-1,1)                                   # shape=(n_spikes,1)
+
+        # Create unit‐length random directions for each spike
+        directions = rng.normal(size=(n_spikes, 3))                 # generate a n_spikes x 3 matrix where each row is a random 3D vector
+        norms = np.linalg.norm(directions, axis=1, keepdims=True)   # compute the euclidian length (L2 norm) of each row (axis=1) keeping the n_spikes x 3 dimension
+        directions = directions/norms                               # convert the random vectors to unit vector
+
+        # Scale to the magnitude
+        spike_offsets = directions*mags
+
+        # Inject spikes
+        pts_noisy[spike_idxs] += spike_offsets
+
+    # Salt-and-pepper noise
+    if pepper_ratio > 0.0:
+        min_points_kept = 1000
+        target_drop   = int(np.floor(pepper_ratio * N))             # compute number of points we want to "turned off"
+        max_drop = max(0, N - min_points_kept)                      # but never drop so many that <min_points_kept remain:
+        n_drop   = min(target_drop, max_drop)                       # cap the drop at a certain maximum
+        if n_drop < target_drop:
+            logging.warning(
+                f"pepper_ratio={pepper_ratio:.3f} would drop {target_drop} pts,"
+                f"clamping to {n_drop} to keep ≥{min_points_kept} points."
+            )
+        drop_idx = rng.choice(N, size=n_drop, replace=False)        # randomly select which points will be 'turned off'
+        mask = np.ones(N, dtype=bool)                               # initialize an all-True mask with the length equal to the number of points
+        mask[drop_idx] = False                                      # set the mask to False at the selected points
+
+        pts_noisy = pts_noisy[mask]                                 # apply the mask to the points
+
+        # Drop corresponding attributes (if any)
+        colors = np.asarray(pcd.colors)[mask] if pcd.has_colors() else None
+        normals = np.asarray(pcd.normals)[mask] if pcd.has_normals() else None
+
+    # If no salt-and-pepper noise, preserve all attributes (if any)
+    else:
+        colors  = np.asarray(pcd.colors)  if pcd.has_colors()  else None
+        normals = np.asarray(pcd.normals) if pcd.has_normals() else None
+
+    # 6) Create a new point cloud (so the original remains unchanged)
+    noisy_pcd = o3d.geometry.PointCloud()
+    noisy_pcd.points = o3d.utility.Vector3dVector(pts_noisy)
+    if colors is not None:
+        noisy_pcd.colors = o3d.utility.Vector3dVector(colors)
+    if normals is not None:
+        noisy_pcd.normals = o3d.utility.Vector3dVector(normals)
+
+    return noisy_pcd
+
+
+def read_pcd(pcd_path: str, **noise_kwargs) -> o3d.geometry.PointCloud:
+    """
+    Loads a point cloud from a given file path and (optionally) apply noise.
+    Check `add_noise` documentation for details on noise settings
+    
+    Args:
+        pcd_path:         path to the file containing the point cloud data
+        **noise_kwargs:   passed directly to `add_noise`, which supports:
+                            - fixed, sigma, sigma_max,
+                            - spike_ratio, spike_min, spike_max, spike_skew,
+                            - pepper_ratio.
+
+    Returns:
+        The loaded (and possibly noised) point cloud.
+    """
+
+    pcd = o3d.io.read_point_cloud(pcd_path)
+    pcd = add_noise(pcd, **noise_kwargs)    
+    return pcd
+
+
+# 4 ICP Pipeline Implementation (Global Registration — FPFH + RANSAC — and Local Refinement — ICP)
 
 @timer('preprocessing')
 def preprocess_cloud(pcd, voxel_size):
@@ -181,7 +324,7 @@ def preprocess_cloud(pcd, voxel_size):
 
 
 @timer('ransac')
-def execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpfh, inlier_th, voxel_size):
+def execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpfh, inlier_th):
     """
     Executes the Global Registration (through RANSAC algorithm) of
     the input source cloud (after being downsampled), given its
@@ -192,7 +335,7 @@ def execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpf
         target_down (open3d.geometry.PointCloud): Downsampled target cloud
         source_fpfh (open3d.registration.Feature): FPFH features of source cloud
         target_fpfh (open3d.registration.Feature): FPFH features of target cloud
-        voxel_size (float): Resulting size of voxels after downsampling
+        inlier_th (float): Maximum threshold distance for a pair alignment to be valid
 
     Returns:
         open3d.pipelines.registration.RegistrationResult: Class that contains the registration results
@@ -256,7 +399,7 @@ def GlobalRegistration_withICP(source, target, voxel_size, inlier_th):
     target_down, target_fpfh = preprocess_cloud(target, voxel_size)
 
     #Global Alignment (RANSAC)
-    result_ransac = execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpfh, inlier_th, voxel_size)
+    result_ransac = execute_GlobalRegistration(source_down, target_down, source_fpfh, target_fpfh, inlier_th)
 
     #Local Refinement (ICP)
     trans_init = result_ransac.transformation
@@ -292,8 +435,7 @@ def compute_overlap_ratio(pcd0, pcd1, trans, voxel_size):
     return max(overlap0, overlap1)
 
 
-
-def ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs):
+def ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs, **noise_kwargs):
     """
     Executes the complete ICP pipeline for a whole scene.
 
@@ -302,6 +444,7 @@ def ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs):
         voxel_size (float): Resulting size of voxels after downsampling
         dist_threhsold_ICP (float): Threshold distance for a correspondence
                                      pair to be considered valid during ICP
+        **noise_kwargs (dict): passed directly to `read_pcd` to handle noise with `add_noise`  
 
     Returns:
         pd.DataFrame: Pandas DataFrame with the registration results of the scene
@@ -331,8 +474,8 @@ def ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs):
         src_path = os.path.join(frag_folder, 'cloud_bin_%d.ply' %src_ID)
         tgt_path = os.path.join(frag_folder, 'cloud_bin_%d.ply' %tgt_ID)
 
-        source = o3d.io.read_point_cloud(src_path)
-        target = o3d.io.read_point_cloud(tgt_path)
+        source = read_pcd(src_path, **noise_kwargs)
+        target = read_pcd(tgt_path, **noise_kwargs)
 
         #Execute the complete pipeline
         ransac_reg, icp_reg = GlobalRegistration_withICP(source, target, voxel_size, inlier_th)
@@ -361,8 +504,6 @@ def ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs):
     return scene_results
 
 
-
-
 def get_matching_pairs(file):
     scene = None
     matching_pairs = defaultdict(list)
@@ -378,7 +519,7 @@ def get_matching_pairs(file):
     return matching_pairs
 
 
-def ICP_pipeline(dataset, split, voxel_size, inlier_th, subset=False):
+def ICP_pipeline(dataset, split, voxel_size, inlier_th, subset=False, **noise_kwargs):
     """
     Executes the complete ICP pipeline for a whole split
     (train, test or validation) of a given dataset.
@@ -389,6 +530,7 @@ def ICP_pipeline(dataset, split, voxel_size, inlier_th, subset=False):
         voxel_size (float): Resulting size of voxels after downsampling
         dist_threhsold_ICP (float): Threshold distance for a correspondence
                                      pair to be considered valid during ICP
+        **noise_kwargs (dict): passed directly to `read_pcd` to handle noise with `add_noise`
 
     Returns:
         pd.DataFrame: Pandas DataFrame with the registration results of the split
@@ -426,14 +568,14 @@ def ICP_pipeline(dataset, split, voxel_size, inlier_th, subset=False):
                 for j in range(i + 2, num_frags):
                     matching_pairs[scene].append([i, j])
 
-        scene_results = ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs)     #apply pipeline
+        scene_results = ICP_pipeline_scene(frag_folder, voxel_size, inlier_th, matching_pairs, **noise_kwargs)     #apply pipeline
         
         dataset_results = pd.concat([dataset_results, scene_results], ignore_index=True)                    #append its results
 
     return dataset_results
 
 
-## 3.1 Iterations Counter
+# 4.1 Iterations Counter
 
 def get_iterations(captured_output):
     """
@@ -529,8 +671,7 @@ class Tee(io.StringIO):
         super().flush()
 
 
-
-def execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name):
+def execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name, **noise_kwargs):
     """
     Executes the ICP pipeline and augments the results with RANSAC and ICP iteration counts.
     
@@ -539,6 +680,7 @@ def execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name
       - inlier_th: The inlier distance threshold.
       - dataset, split, subset: Parameters for specifying the dataset and experiment.
       - run_name: A name for the current run.
+      - **noise_kwargs: passed directly to `read_pcd` to handle noise with `add_noise`
     
     Returns:
       - output_folder: The path to the output folder.
@@ -559,7 +701,7 @@ def execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name
         # Set Open3D's verbosity level to Debug to capture detailed iteration information
         o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Debug)
         # Execute the ICP pipeline
-        results = ICP_pipeline(dataset, split, voxel_size, inlier_th, subset)
+        results = ICP_pipeline(dataset, split, voxel_size, inlier_th, subset, **noise_kwargs)
         # Returns Open3D's verbosity level to default mode
         o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
     # Retrieve the captured output as a string
@@ -575,17 +717,32 @@ def execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name
     return output_folder, results
 
 
-# 5 Algorithm Testing and Results
+# 5 Parameters Tunning (Not Applicable for the script case)
+
+
+# 6 Algorithm Testing and Results
 
 voxel_size = 0.05            # best_voxel_size obtained at last validation
 inlier_th = 0.05             # 5 cm --> this must be the same for ICP
 dataset = "3DMatch"                        
 split = 'test'
-subset = False                # set to False to run all samples
+subset = False                # set to False to test all samples
 
-run_name = "ICP_test_time_estimation"
+fixed = False
+sigma_min = 0.01    # 1 cm
+sigma_max = 0.05    # 5 cm
+spike_ratio = 0.000 # 0.5%
+spike_min = 0.0     # 10 cm
+spike_max = 0.0     # 50 cm
+spike_skew = 2.0    # positive skew
+pepper_ratio = 0.00 # 1%
+noise_kwargs = {'seed': 42, 'fixed': fixed, 'sigma': sigma_min, 'sigma_max': sigma_max,
+                'spike_ratio': spike_ratio, 'spike_min': spike_min, 'spike_max': spike_max,
+                'spike_skew': spike_skew, 'pepper_ratio': pepper_ratio}
 
-output_folder, results = execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name)
+run_name = "ICP_complete_noise_gaussian"
+
+output_folder, results = execute_ICP_Pipeline(voxel_size, inlier_th, dataset, split, subset, run_name, **noise_kwargs)
 
 print("============================================== Registration Table ==============================================")
 print(results.to_string(index=False))
@@ -604,11 +761,10 @@ def save_registration_table(df, output_folder):
 
     return reg_table_path
 
-
 reg_table_path = save_registration_table(results, output_folder)
 
 
-## 5.1 Generating .log files
+# 6.1 Generating .log files
 
 def string_to_nparray(matrix_str):
     rows_list = []
@@ -622,7 +778,7 @@ def string_to_nparray(matrix_str):
 
 # In case you don't want to run all the testing again
 # You can input the .csv file you previously obtained
-# And you thiis cell to retrive the DF  table
+# And use this function to retrive the DF table
 def get_df_from_reg_table(reg_table_path):
     
     if not os.path.isfile(reg_table_path):
@@ -718,9 +874,7 @@ def save_registration_logs(df, subset, data_root, data_dict, dataset, split, out
         write_log(df_scene, log_path, nFrags)
         write_log(df_scene, guess_log_path, nFrags, final_transformation=False)
 
-
 save_registration_logs(results, subset, data_root, data, dataset, split, output_folder)
-
 
 
 eval_csv_path = f"{output_folder}/evaluation/registration_evaluation_ICP.csv"
@@ -733,7 +887,9 @@ else:
     print(f'No file found at: {eval_csv_path}\nPlease insert the .csv file with the obtained evaluation results in the expected path with the expected file name')
 
 
-## 5.3 Results Analysis
+# 6.2 Result Visualization (Not Applicable for the script case)
+
+# 6.3 Results Analysis
 
 def assess_results(results):
     """
@@ -748,10 +904,11 @@ def assess_results(results):
     """
 
     # 1) Compute per-scene mean
-    #    (Dropping 'Source','Target','Transformation' from the grouping)
+    #    Dropping 'Source','Target','Transformation' from the grouping
+    #    And, for each "col+group" filter out the 0 entries
     analysis_mean = results.copy()                                                                              # create a copy of results
     analysis_mean = analysis_mean.drop(["Source", "Target", "Initial Guess", "Transformation"], axis="columns")  # remove unnecessary columns
-    analysis_mean = analysis_mean.groupby("Scene").mean().reset_index()                                         #  compute the averages of each scene
+    analysis_mean = analysis_mean.groupby("Scene").agg(lambda x: x[x != 0].mean()).reset_index()                                       #  compute the averages of each scene
     analysis_mean = analysis_mean.rename(columns={"RANSAC: Fitness": "RANSAC: Mean Fitness",
                                                   "ICP: Fitness": "ICP: Mean Fitness",
                                                   "RANSAC: Inlier RMSE": "RANSAC: Mean Inlier RMSE",
@@ -776,27 +933,27 @@ def assess_results(results):
 
     # 4) Compute overall means (using per-scene means) and overall std (using all samples) 
     total = pd.DataFrame({"Scene": "TOTAL",
-                          "Mean RANSAC Iterations": analysis_mean["Mean RANSAC Iterations"].mean(),
-                          "STD RANSAC Iterations": [results["RANSAC Iterations"].std()],
-                          "Mean ICP Iterations": analysis_mean["Mean ICP Iterations"].mean(),
-                          "STD ICP Iterations": [results["ICP Iterations"].std()],
-                          "RANSAC: Mean Fitness": analysis_mean["RANSAC: Mean Fitness"].mean(),
-                          "RANSAC: STD Fitness": [results["RANSAC: Fitness"].std()],
-                          "ICP: Mean Fitness": analysis_mean["ICP: Mean Fitness"].mean(),
-                          "ICP: STD Fitness": [results["ICP: Fitness"].std()],
-                          "RANSAC: Mean Inlier RMSE": analysis_mean["RANSAC: Mean Inlier RMSE"].mean(),
-                          "RANSAC: STD Inlier RMSE": [results["RANSAC: Inlier RMSE"].std()],
-                          "ICP: Mean Inlier RMSE": analysis_mean["ICP: Mean Inlier RMSE"].mean(),
-                          "ICP: STD Inlier RMSE": [results["ICP: Inlier RMSE"].std()]}, index=[0])
+                          "Mean RANSAC Iterations": results["RANSAC Iterations"][results["RANSAC Iterations"] != 0].mean(),
+                          "STD RANSAC Iterations": results["RANSAC Iterations"].std(),
+                          "Mean ICP Iterations": results["ICP Iterations"].mean(),
+                          "STD ICP Iterations": results["ICP Iterations"].std(),
+                          "RANSAC: Mean Fitness": results["RANSAC: Fitness"].mean(),
+                          "RANSAC: STD Fitness": results["RANSAC: Fitness"].std(),
+                          "ICP: Mean Fitness": results["ICP: Fitness"].mean(),
+                          "ICP: STD Fitness": results["ICP: Fitness"].std(),
+                          "RANSAC: Mean Inlier RMSE": results["RANSAC: Inlier RMSE"].mean(),
+                          "RANSAC: STD Inlier RMSE": results["RANSAC: Inlier RMSE"].std(),
+                          "ICP: Mean Inlier RMSE": results["ICP: Inlier RMSE"].mean(),
+                          "ICP: STD Inlier RMSE": results["ICP: Inlier RMSE"].std()}, index=[0])
 
     # 5) Compute the inter_scene std deviation using the per-scene means
     inter_scenes_std = pd.DataFrame({"Scene": "Inter-Scene STD",
-                                     "RANSAC: STD Fitness": [analysis["RANSAC: Mean Fitness"].std()],
-                                     "ICP: STD Fitness": [analysis["ICP: Mean Fitness"].std()],
-                                     "RANSAC: STD Inlier RMSE": [analysis["RANSAC: Mean Inlier RMSE"].std()],
-                                     "ICP: STD Inlier RMSE": [analysis["ICP: Mean Inlier RMSE"].std()],
-                                     "STD RANSAC Iterations": [analysis["Mean RANSAC Iterations"].std()],
-                                     "STD ICP Iterations": [analysis["Mean ICP Iterations"].std()],
+                                     "RANSAC: STD Fitness": analysis["RANSAC: Mean Fitness"].std(),
+                                     "ICP: STD Fitness": analysis["ICP: Mean Fitness"].std(),
+                                     "RANSAC: STD Inlier RMSE": analysis["RANSAC: Mean Inlier RMSE"].std(),
+                                     "ICP: STD Inlier RMSE": analysis["ICP: Mean Inlier RMSE"].std(),
+                                     "STD RANSAC Iterations": analysis["Mean RANSAC Iterations"].std(),
+                                     "STD ICP Iterations": analysis["Mean ICP Iterations"].std(),
                                      # Leave the "mean" columns of the inter-scene std row blank
                                      "RANSAC: Mean Fitness": "",
                                      "ICP: Mean Fitness": "",
@@ -824,8 +981,8 @@ def assess_results(results):
 
     return analysis
 
-
 analysis = assess_results(results)
+
 print("============================================== Analysis Table ==============================================")
 print(analysis.to_string(index=False))
 print("============================================================================================================")
