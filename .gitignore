@@ -1,2 +1,5 @@
 data/
 output/FCGF/**/features/
+output/SuctionNet/**/xyz_and_features/
+output/SuctionNet/**/filtered_output_complete_test.txt
+output/SuctionNet/**/raw_output_complete_test.txt

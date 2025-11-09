@@ -335,12 +335,12 @@ def GO_pipeline(dataset_dir: str, setting: Literal['full_scene', 'single_object'
         full_scene_dir = f'{dataset_dir}/acquired/full_scene'                   # set path to folder with full scene clouds
         for scene in sorted(os.listdir(full_scene_dir)):                        # for each scene (sorted numerically)
             scene_id = int(scene.split('_')[-1])                                # get scene id
-            if scene_id > 91: continue                                          # optional limit. Useful when debugging
+            # if scene_id > 91: continue                                          # optional limit. Useful when debugging
             scene_dir = f'{full_scene_dir}/{scene}'                             # get path of a specific scene's folder
             label_dir = f'{dataset_dir}/acquired/raw/{scene}/realsense/label'   # get path of labels for that scene
             for image in sorted(os.listdir(scene_dir)):                         # for each image (sorted numerically)
                 image_id = int(image.split('_')[-1].split('.')[0])              # get its id
-                if image_id > 3: continue                                       # optional limit. Useful when debugging
+                # if image_id > 3: continue                                       # optional limit. Useful when debugging
                 label = o3d.io.read_image(f'{label_dir}/{image_id:04d}.png')    # get the label image of the current image
                 label = np.array(label)                                         # convert it to a numpy array 
                 obj_list = np.unique(label)                                     # get list of all objects included in the image
@@ -353,11 +353,11 @@ def GO_pipeline(dataset_dir: str, setting: Literal['full_scene', 'single_object'
         single_object_dir = f'{dataset_dir}/acquired/single_object'
         for scene in sorted(os.listdir(single_object_dir)):
             scene_id = int(scene.split('_')[-1])
-            if scene_id > 91: continue
+            # if scene_id > 91: continue
             scene_dir = f'{single_object_dir}/{scene}'
             for image in sorted(os.listdir(scene_dir)):
                 image_id = int(image.split('_')[-1])
-                if image_id > 3: continue
+                # if image_id > 3: continue
                 image_dir = f'{scene_dir}/{image}'
                 for obj_file in os.listdir(image_dir):                          # we get object id directly from the file name (no need for label)
                     obj_id = int(obj_file.split('_')[-1].split('.')[0])
@@ -605,12 +605,12 @@ def DL_pipeline(dataset_dir: str, DL_out_dir: str, setting: Literal['full_scene'
         full_scene_dir = f'{dataset_dir}/acquired/full_scene'                   # set path to folder with full scene clouds
         for scene in sorted(os.listdir(full_scene_dir)):                        # for each scene (sorted numerically)
             scene_id = int(scene.split('_')[-1])                                # get scene id
-            if scene_id > 91: continue                                          # optional limit. Useful when debugging
+            # if scene_id > 91: continue                                          # optional limit. Useful when debugging
             scene_dir = f'{full_scene_dir}/{scene}'                             # get path of a specific scene's folder
             label_dir = f'{dataset_dir}/acquired/raw/{scene}/realsense/label'   # get path of labels for that scene
             for image in sorted(os.listdir(scene_dir)):                         # for each image (sorted numerically)
                 image_id = int(image.split('_')[-1].split('.')[0])              # get its id
-                if image_id > 3: continue                                       # optional limit. Useful when debugging
+                # if image_id > 3: continue                                       # optional limit. Useful when debugging
                 label = o3d.io.read_image(f'{label_dir}/{image_id:04d}.png')    # get the label image of the current image
                 label = np.array(label)                                         # convert it to a numpy array 
                 obj_list = np.unique(label)                                     # get list of all objects included in the image
@@ -623,11 +623,11 @@ def DL_pipeline(dataset_dir: str, DL_out_dir: str, setting: Literal['full_scene'
         single_object_dir = f'{dataset_dir}/acquired/single_object'
         for scene in sorted(os.listdir(single_object_dir)):
             scene_id = int(scene.split('_')[-1])
-            if scene_id > 91: continue
+            # if scene_id > 91: continue
             scene_dir = f'{single_object_dir}/{scene}'
             for image in sorted(os.listdir(scene_dir)):
                 image_id = int(image.split('_')[-1])
-                if image_id > 3: continue
+                # if image_id > 3: continue
                 image_dir = f'{scene_dir}/{image}'
                 for obj_file in os.listdir(image_dir):                          # we get object id directly from the file name (no need for label)
                     obj_id = int(obj_file.split('_')[-1].split('.')[0])
@@ -683,7 +683,7 @@ def run_DL_pipeline(dataset_dir: str, setting: Literal['full_scene', 'single_obj
 # 5 Testing
 
 timestamp = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime('%Y-%m-%d_%H-%M-%S')
-run_name = 'script_subset_test'
+run_name = 'complete_test'
 output_dir = f"../output/SuctionNet/{run_name}-{timestamp}"
 dataset_dir = '../data/SuctionNet'
 inlier_th = 0.005
