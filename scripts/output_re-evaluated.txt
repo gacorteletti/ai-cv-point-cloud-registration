@@ -1,0 +1,77 @@
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0090/image_0179/scene_0090_image_0179_object_21.ply – skipping row 1793
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0090/image_0224/scene_0090_image_0224_object_19.ply – skipping row 2197
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0090/image_0227/scene_0090_image_0227_object_19.ply – skipping row 2224
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0022/scene_0099_image_0022_object_28.ply – skipping row 21759
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0130/scene_0099_image_0130_object_28.ply – skipping row 22828
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0136/scene_0099_image_0136_object_18.ply – skipping row 22886
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0137/scene_0099_image_0137_object_18.ply – skipping row 22896
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0138/scene_0099_image_0138_object_18.ply – skipping row 22906
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0139/scene_0099_image_0139_object_18.ply – skipping row 22916
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0144/scene_0099_image_0144_object_28.ply – skipping row 22967
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0165/scene_0099_image_0165_object_18.ply – skipping row 23176
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0090/image_0179/scene_0090_image_0179_object_21.ply – skipping row 1793
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0090/image_0224/scene_0090_image_0224_object_19.ply – skipping row 2197
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0090/image_0227/scene_0090_image_0227_object_19.ply – skipping row 2224
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0022/scene_0099_image_0022_object_28.ply – skipping row 21759
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0130/scene_0099_image_0130_object_28.ply – skipping row 22828
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0136/scene_0099_image_0136_object_18.ply – skipping row 22886
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0137/scene_0099_image_0137_object_18.ply – skipping row 22896
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0138/scene_0099_image_0138_object_18.ply – skipping row 22906
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0139/scene_0099_image_0139_object_18.ply – skipping row 22916
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0144/scene_0099_image_0144_object_28.ply – skipping row 22967
+[WARN] Missing target: ../data/SuctionNet/acquired/single_object/scene_0099/image_0165/scene_0099_image_0165_object_18.ply – skipping row 23176
+Estimated Recall totals saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/recall_estimated_totals_re-evaluated.csv
+==================== Estimated Recall ====================
+       Setting  Geometric-Only  Deep-Learning
+Single Objects       69.282922      67.810498
+   Full Scenes       13.358001       5.654180
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/geometric_only-full_scene/local_evaluation_per_scene_re-evaluated.csv
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/geometric_only-single_object/local_evaluation_per_scene_re-evaluated.csv
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/deep_learning-full_scene/local_evaluation_per_scene_re-evaluated.csv
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/deep_learning-single_object/local_evaluation_per_scene_re-evaluated.csv
+Overall comparison table (totals per pipeline/setting combination) saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/overall_evaluation_per_scene_totals_re-evaluated.csv
+==================== Comparison Table ====================
+      Setting       Pipeline Mean RANSAC Iterations  STD RANSAC Iterations Mean ICP Iterations  STD ICP Iterations RANSAC: Mean Fitness  RANSAC: STD Fitness ICP: Mean Fitness  ICP: STD Fitness RANSAC: Mean Inlier RMSE  RANSAC: STD Inlier RMSE ICP: Mean Inlier RMSE  ICP: STD Inlier RMSE
+   Full Scene Geometric-Only              33.305486              35.565124           27.828198            4.724580             0.368943             0.122329          0.494762          0.117636                 0.002729                 0.000265              0.002301              0.000290
+   Full Scene  Deep-Learning               7.774713               8.989646           28.311765            4.229596             0.370215             0.146360          0.492433          0.120982                 0.002778                 0.000267               0.00233              0.000283
+Single Object Geometric-Only             108.291908             102.012011           27.147926            5.456973             0.366593             0.121396          0.494914          0.116773                 0.003077                 0.000302              0.002278              0.000253
+Single Object  Deep-Learning              45.193368              47.555448           26.322701            6.201199             0.440833             0.130748           0.50743          0.119857                 0.002627                 0.000248               0.00228              0.000236
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/geometric_only-full_scene/local_evaluation_per_object_re-evaluated.csv
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/geometric_only-single_object/local_evaluation_per_object_re-evaluated.csv
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/deep_learning-full_scene/local_evaluation_per_object_re-evaluated.csv
+Local evaluation table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/deep_learning-single_object/local_evaluation_per_object_re-evaluated.csv
+Per-object recall results on different pipelines/settings table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/objects_recall_detailed_re-evaluated.csv
+==================== Per-Object Recall Results ====================
+ Object  pct GO Full  pct DL Full  pct GO Single  pct DL Single
+     12    65.234375    43.164062      85.546875      87.304688
+     30    22.167969    17.480469      98.242188      98.828125
+     52    25.781250     3.906250      90.820312      97.265625
+     57    16.992188    12.792969      89.062500      93.750000
+     31    20.715835    13.665944      80.911063      85.900217
+     10     6.640625     0.781250      97.656250      95.507812
+     21    30.804598     1.839080      84.562212      82.488479
+     61    30.273438     5.859375      83.203125      76.953125
+     27     5.566406     4.589844      90.820312      93.847656
+     23    10.742188     4.394531      87.695312      91.601562
+     15    12.654321     4.115226      85.493827      92.078189
+     71    14.062500     0.195312      76.562500      92.480469
+     16    25.390625    14.257812      70.898438      66.894531
+      8     8.169291     0.787402      80.216535      80.511811
+     18    15.015015    17.417417      62.977867      72.736419
+     19     0.000000     1.006036      81.010101      81.414141
+     49    16.015625     3.613281      63.183594      79.785156
+     28     2.278177     0.599520      62.695548      64.139591
+     63    14.648438     0.781250      86.816406      16.210938
+     64     1.171875     5.078125      60.156250      39.843750
+      6     8.398438     0.781250      48.828125      42.187500
+     37     5.670103     0.618557      45.979381      47.319588
+     39    11.718750     1.953125      42.773438      35.546875
+     38     0.976562     1.953125      41.015625      46.093750
+     67     2.929688     0.000000      42.382812      34.082031
+     62     2.343750     0.000000      30.761719      40.820312
+      9     4.785156     1.074219      41.503906      21.191406
+     59     2.148438     1.367188      25.781250      35.156250
+     41     0.390625     0.000000      19.335938      22.265625
+Top and bottom objects' recall results summary table saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/objects_recall_top_bottom_re-evaluated.csv
+==================== Top and Bottom Objects' Recall Summary ====================
+Recall heatmap saved at: ../output/SuctionNet/complete_test-2025-10-07_08-23-06/recall_heatmap_re-evaluated.png
