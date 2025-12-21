@@ -300,8 +300,22 @@ def run_GO_single_pair(setting: str, dataset_dir: str, voxel_size: float, inlier
     result_ransac, result_icp = GlobalRegistration_withICP(source_moved, target_moved, voxel_size, inlier_th)
 
     # Update the obtained transformation to include also the initial translation
+    # These are transforms from the ORIGINAL CAD frame to the ORIGINAL target frame
     T_ransac = np.linalg.inv(T_target_0) @ result_ransac.transformation @ T_source_0
     T_icp   = np.linalg.inv(T_target_0) @ result_icp.transformation   @ T_source_0
+
+    # re-evaluate full-scene fitness/RMSE on the desired object only
+    if setting == 'full_scene':
+        # For full_scene setting, evaluation target is the per-object cloud
+        eval_target_path = f'{dataset_dir}/acquired/single_object/scene_{scene_id:04d}/image_{image_id:04d}/scene_{scene_id:04d}_image_{image_id:04d}_object_{obj_id:02d}.ply'
+        eval_target = o3d.io.read_point_cloud(eval_target_path)
+    else:
+        # For single_object setting, target already is the per-object cloud
+        eval_target = target  # original (uncentered) target cloud
+
+    # Re-evaluate the final RANSAC and ICP transforms on the chosen eval target
+    eval_ransac = o3d.pipelines.registration.evaluate_registration(source, eval_target, inlier_th, T_ransac)
+    eval_icp = o3d.pipelines.registration.evaluate_registration(source, eval_target, inlier_th, T_icp)
 
     # Append the new entry in the results table and returns
     results.append({
@@ -309,10 +323,10 @@ def run_GO_single_pair(setting: str, dataset_dir: str, voxel_size: float, inlier
         "Scene": scene_id,
         "Image": image_id,
         "Object": obj_id,
-        "RANSAC: Fitness": result_ransac.fitness,
-        "ICP: Fitness": result_icp.fitness,
-        "RANSAC: Inlier RMSE": result_ransac.inlier_rmse,
-        "ICP: Inlier RMSE": result_icp.inlier_rmse,
+        "RANSAC: Fitness": eval_ransac.fitness,
+        "ICP: Fitness": eval_icp.fitness,
+        "RANSAC: Inlier RMSE": eval_ransac.inlier_rmse,
+        "ICP: Inlier RMSE": eval_icp.inlier_rmse,
         "RANSAC: Transformation": T_ransac,
         "ICP: Transformation": T_icp
     })
@@ -570,8 +584,19 @@ def run_DL_single_pair(setting: str, dataset_dir: str, DL_out_dir: str, voxel_si
     save_xyz_and_features(DL_out_dir, scene_id, image_id, obj_id, xyz_down_tgt, features_tgt, model=False)
 
     # Update the obtained transformations to include also the initial translation
+    # These are transforms from the ORIGINAL CAD frame to the ORIGINAL target frame
     T_ransac = np.linalg.inv(T_target_0) @ result_ransac.transformation @ T_source_0
     T_icp   = np.linalg.inv(T_target_0) @ result_icp.transformation   @ T_source_0
+
+    # re-evaluate full-scene fitness/RMSE on the desired object only
+    if setting == 'full_scene':
+        eval_target_path = f'{dataset_dir}/acquired/single_object/scene_{scene_id:04d}/image_{image_id:04d}/scene_{scene_id:04d}_image_{image_id:04d}_object_{obj_id:02d}.ply'
+        eval_target = o3d.io.read_point_cloud(eval_target_path)
+    else:
+        eval_target = target  # original (uncentered) target cloud in 'single_object' setting
+
+    eval_ransac = o3d.pipelines.registration.evaluate_registration(source, eval_target, inlier_th, T_ransac)
+    eval_icp = o3d.pipelines.registration.evaluate_registration(source, eval_target, inlier_th, T_icp)
 
     # Append the new entry in the results table and returns
     results.append({
@@ -579,10 +604,10 @@ def run_DL_single_pair(setting: str, dataset_dir: str, DL_out_dir: str, voxel_si
         "Scene": scene_id,
         "Image": image_id,
         "Object": obj_id,
-        "RANSAC: Fitness": result_ransac.fitness,
-        "ICP: Fitness": result_icp.fitness,
-        "RANSAC: Inlier RMSE": result_ransac.inlier_rmse,
-        "ICP: Inlier RMSE": result_icp.inlier_rmse,
+        "RANSAC: Fitness": eval_ransac.fitness,
+        "ICP: Fitness": eval_icp.fitness,
+        "RANSAC: Inlier RMSE": eval_ransac.inlier_rmse,
+        "ICP: Inlier RMSE": eval_icp.inlier_rmse,
         "RANSAC: Transformation": T_ransac,
         "ICP: Transformation": T_icp
     })
