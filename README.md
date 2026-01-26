@@ -209,8 +209,8 @@ pip install -r source/FCGF/requirements.txt
 This thesis was conducted at **Politecnico di Torino** and developed in partnership with **Comau**, where I completed my internship during the same period.
 
 <p align="center">
-  <img src="assets/polito_logo.png" height="200" alt="Politecnico di Torino logo" />
-  <img src="assets/comau_logo.png" height="200" alt="Comau logo" />
+  <img src="assets/polito_logo.png" height="150" alt="Politecnico di Torino logo" />
+  <img src="assets/comau_logo.png" height="150" alt="Comau logo" />
 </p>
 
 
