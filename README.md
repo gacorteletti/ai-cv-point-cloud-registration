@@ -209,7 +209,8 @@ pip install -r source/FCGF/requirements.txt
 This thesis was conducted at **Politecnico di Torino** and developed in partnership with **Comau**, where I completed my internship during the same period.
 
 <p align="center">
-  <img src="assets/polito_logo.png" width="900" alt="Politecnico di Torino logo" />
+  <img src="assets/polito_logo.png" height="200" alt="Politecnico di Torino logo" />
+  <img src="assets/comau_logo.png" height="200" alt="Comau logo" />
 </p>
 
 
@@ -220,8 +221,8 @@ If you use this repository in academic work, please cite the thesis:
 ```bibtex
 @mastersthesis{corteletti2025_aibased_pcr,
   title  = {AI-Based Point Cloud Registration},
-  author = {Corteletti T{\'a}pias, Gabriel Antonio},
+  author = {Corteletti, Gabriel},
   school = {Politecnico di Torino},
-  year   = {2025},
+  year   = {2025}
 }
 ```
